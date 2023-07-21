@@ -1,0 +1,3 @@
+# Code Interpreter Lite
+
+An experimental client that uses LLMs with docker-python-sandbox-supervisor and docker-python-sandbox to run python code in a sandboxed environment.
