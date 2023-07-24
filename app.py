@@ -3,14 +3,16 @@ from dotenv import load_dotenv
 import os
 import requests
 import io
+from langchain import LLMChain
 from langchain.chat_models import ChatOpenAI
 from langchain.llms import TextGen
 from langchain.chat_models import ChatAnthropic
-from langchain.agents import initialize_agent, AgentType, AgentExecutor
+from langchain.agents import ZeroShotAgent, initialize_agent, AgentType, AgentExecutor
 from langchain.tools import StructuredTool
 from langchain.callbacks.base import BaseCallbackHandler
 from langchain.schema import AgentAction, LLMResult, AgentFinish
-
+from langchain.prompts import MessagesPlaceholder
+from langchain.memory import ConversationBufferMemory
 
 from typing import Any, Dict, List
 
@@ -29,9 +31,10 @@ with gr.Blocks() as demo:
     file_list = gr.State(value={})
     assistant = gr.State(
         value={"selected": DEFAULT_ASSISTANT, "options": ASSISTANT_LIST})
+    agent_executor = gr.State()
 
     with gr.Column():
-        token_box = gr.Markdown(f"Current Token: ")
+        token_box = gr.Markdown("Current Token: ")
         assistant_box = gr.Markdown(f"Current Assistant: {DEFAULT_ASSISTANT}")
 
     with gr.Row() as container_row:
@@ -55,7 +58,7 @@ with gr.Blocks() as demo:
 
     # interactions
 
-    def create_container(username_instance):
+    def create_container(username_instance, assistant_instance):
         # create token
         token_response = requests.post(
             f'{SUPERVISOR_API}/token', data={'username': username_instance, 'password': username_instance}, timeout=600)
@@ -72,60 +75,37 @@ with gr.Blocks() as demo:
         if container_response.status_code != 200:
             raise gr.Error("Problem creating container")
 
+        agent_executor_instance = setup_assistant(
+            assistant_instance, token_text)
+
         return {
             token_box: f"Current Token: {token_text}",
             token: token_text,
             container_row: gr.update(visible=False),
-            chatbot_column: gr.update(visible=True)
+            chatbot_column: gr.update(visible=True),
+            agent_executor: agent_executor_instance
         }
 
-    def select_assistant(assistant_instance, assistant_selection_instance):
-        assistant_instance["selected"] = assistant_selection_instance
-        return {
-            assistant: assistant_instance,
-            assistant_selection: assistant_selection_instance,
-            assistant_box: f"Current Assistant: {assistant_selection_instance}"
-        }
-
-    def upload_file(file, token_instance, file_list_instance):
-        file_name = os.path.basename(file.name)
-
-        file_response = requests.post(
-            f'{SUPERVISOR_API}/uploadfile', headers={
-                'Authorization': f'Bearer {token_instance}'
-            }, files={
-                'file': open(file.name, 'rb')
-            }, timeout=600
-        )
-
-        if file_response.status_code != 200:
-            raise gr.Error("No container created yet")
-            # return {
-            #     file_list: file_list_instance,
-            #     file_output: file_list_instance
-            # }
-
-        file_list_instance[file_name] = f'/mnt/data/{file_name}'
-
-        return {
-            file_list: file_list_instance,
-            file_output: file_list_instance
-        }
-
-    def chatbot_handle(chatbot_instance, msg_instance, token_instance, assistant_instance, file_list_instance):
-        # get assistant
+    def setup_assistant(assistant_instance, token_instance):
         assistant_name = assistant_instance["selected"]
 
         match assistant_name:
             case "gpt3.5":
                 llm = ChatOpenAI(temperature=0, model="gpt-3.5-turbo")
                 agent_type = AgentType.STRUCTURED_CHAT_ZERO_SHOT_REACT_DESCRIPTION
+                max_iterations = 15
             case "gpt4":
                 llm = ChatOpenAI(temperature=0, model="gpt-4")
                 agent_type = AgentType.STRUCTURED_CHAT_ZERO_SHOT_REACT_DESCRIPTION
+                max_iterations = 15
+            case "claude":
+                llm = ChatAnthropic(temperature=0, model="claude-2")
+                agent_type = AgentType.CHAT_ZERO_SHOT_REACT_DESCRIPTION
+                max_iterations = 5
             case "local":
                 llm = TextGen(model_url=TEXTGEN_MODEL_URL)
                 agent_type = AgentType.STRUCTURED_CHAT_ZERO_SHOT_REACT_DESCRIPTION
+                max_iterations = 30
             case _:
                 raise gr.Error("Assistant not supported yet")
                 # return {
@@ -154,12 +134,75 @@ with gr.Blocks() as demo:
 
         tool = StructuredTool.from_function(
             func=code_interpreter_lite, name="Code Interpreter Lite", description="useful for running python code")
+        tools = [tool]
 
-        agent_executor = initialize_agent(
-            [tool],
-            llm,
-            agent=agent_type,
+        memory = ConversationBufferMemory(
+            memory_key="chat_history")
+
+        prompt_prefix = 'You are an agent designed to write and execute python code to answer questions.\nYou have access to a Code Interpreter Lite tool, which you can use to execute python code.\nIf you get an error, debug your code and try again.\nOnly use the output of your code to answer the question. \nYou might know the answer without running any code, but you should still run the code to get the answer.\nIf there is a need to create or save a file, save it in the /mnt/data directory.\nYou cannot install new packages.\n'
+        prompt_suffix = """Begin!"
+
+{chat_history}
+Question: {input}
+{agent_scratchpad}"""
+
+        prompt = ZeroShotAgent.create_prompt(
+            tools,
+            prefix=prompt_prefix,
+            suffix=prompt_suffix,
+            input_variables=["input", "chat_history", "agent_scratchpad"],
         )
+
+        llm_chain = LLMChain(llm=llm, prompt=prompt)
+
+        agent = ZeroShotAgent(llm_chain=llm_chain, tools=tools,
+                              verbose=True, max_iterations=max_iterations)
+
+        agent_executor_instance = AgentExecutor.from_agent_and_tools(
+            agent=agent, tools=tools, verbose=True, memory=memory
+        )
+
+        return agent_executor_instance
+
+    def select_assistant(assistant_instance, assistant_selection_instance, token_instance):
+        assistant_instance["selected"] = assistant_selection_instance
+
+        agent_executor_instance = setup_assistant(
+            assistant_instance, token_instance)
+
+        return {
+            assistant: assistant_instance,
+            assistant_selection: assistant_selection_instance,
+            assistant_box: f"Current Assistant: {assistant_selection_instance}",
+            agent_executor: agent_executor_instance
+        }
+
+    def upload_file(file, token_instance, file_list_instance):
+        file_name = os.path.basename(file.name)
+
+        file_response = requests.post(
+            f'{SUPERVISOR_API}/uploadfile', headers={
+                'Authorization': f'Bearer {token_instance}'
+            }, files={
+                'file': open(file.name, 'rb')
+            }, timeout=600
+        )
+
+        if file_response.status_code != 200:
+            raise gr.Error("No container created yet")
+            # return {
+            #     file_list: file_list_instance,
+            #     file_output: file_list_instance
+            # }
+
+        file_list_instance[file_name] = f'/mnt/data/{file_name}'
+
+        return {
+            file_list: file_list_instance,
+            file_output: file_list_instance
+        }
+
+    def chatbot_handle(chatbot_instance, msg_instance, file_list_instance, agent_executor_instance):
 
         # add files to the prompt
         files_prompt = ""
@@ -167,8 +210,10 @@ with gr.Blocks() as demo:
             files_prompt += f"I have uploaded a file named {file_name}. The file is located at {file_path}.\n"
 
         # format input
-        chatbot_prompt = msg_instance + "\n" + files_prompt
-
+        if len(files_prompt) > 0:
+            chatbot_prompt = files_prompt + "\n" + msg_instance
+        else:
+            chatbot_prompt = msg_instance
         # format chatbot response
         # chatbot_response = tool_input + "\n" + tool_result + "\n" + agent_response
         # chatbot_response = agent_response
@@ -187,7 +232,12 @@ with gr.Blocks() as demo:
             def on_agent_action(self, action: AgentAction, **kwargs: Any) -> Any:
                 chatbot_thought = action.log.split("\n")[0]
                 chatbot_thought = chatbot_thought.replace("Thought: ", "")
-                chatbot_tool_input_code_string = action.tool_input.get("code")
+
+                if isinstance(action.tool_input, str):
+                    chatbot_tool_input_code_string = action.tool_input
+                else:
+                    chatbot_tool_input_code_string = action.tool_input.get(
+                        "code")
                 self.chatbot_response += f"{chatbot_thought}\n"
                 self.chatbot_response += f'```\n{chatbot_tool_input_code_string}\n```\n'
 
@@ -195,7 +245,7 @@ with gr.Blocks() as demo:
                 return self.chatbot_response
 
         chatbotHandler = ChatbotHandler()
-        agent_executor(
+        agent_executor_instance(
             chatbot_prompt, callbacks=[chatbotHandler])
         chatbot_response = chatbotHandler.get_chatbot_response()
 
@@ -204,16 +254,17 @@ with gr.Blocks() as demo:
         return {
             chatbot: chatbot_instance,
             msg: "",
+            agent_executor: agent_executor_instance
         }
 
-    button.click(create_container, username, [
-        token_box, token, container_row, chatbot_column])
+    button.click(create_container, [username, assistant], [
+        token_box, token, container_row, chatbot_column, agent_executor])
     assistant_selection.input(
-        select_assistant, [assistant, assistant_selection], [assistant, assistant_selection, assistant_box])
+        select_assistant, [assistant, assistant_selection, token], [assistant, assistant_selection, assistant_box, agent_executor])
     file_upload.upload(upload_file, [file_upload, token, file_list], [
         file_list, file_output])
-    send.click(chatbot_handle, [chatbot, msg, token,
-               assistant, file_list], [chatbot, msg])
+    send.click(chatbot_handle, [chatbot, msg, file_list, agent_executor], [
+               chatbot, msg, agent_executor])
 
 
 if __name__ == "__main__":
