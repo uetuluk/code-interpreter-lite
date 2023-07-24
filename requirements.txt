@@ -31,7 +31,7 @@ Jinja2==3.1.2
 jsonschema==4.18.4
 jsonschema-specifications==2023.7.1
 kiwisolver==1.4.4
-langchain==0.0.238
+langchain @ git+https://github.com/langchain-ai/langchain.git@961a0e200fb5cb12f1fee6788a298266bc5266d1#subdirectory=libs/langchain
 langsmith==0.0.12
 linkify-it-py==2.0.2
 markdown-it-py==2.2.0
@@ -44,6 +44,7 @@ multidict==6.0.4
 mypy-extensions==1.0.0
 numexpr==2.8.4
 numpy==1.25.1
+openai==0.27.8
 openapi-schema-pydantic==1.2.4
 orjson==3.9.2
 packaging==23.1
