@@ -56,6 +56,15 @@ with gr.Blocks() as demo:
             msg = gr.Textbox(placeholder="Type your message here", lines=8)
             send = gr.Button(value="Send", variant="primary")
 
+        with gr.Column():
+            gr.Markdown("Manual Download from Container")
+            manual_download_text = gr.Textbox(
+                placeholder="Add the path here. You can only download files created inside /mnt/data")
+            with gr.Row():
+                manual_download_file = gr.File(
+                    label="Files", interactive=False, type="binary")
+                manual_download_send = gr.Button(value="Download")
+
     # interactions
 
     def create_container(username_instance, assistant_instance):
@@ -92,19 +101,15 @@ with gr.Blocks() as demo:
         match assistant_name:
             case "gpt3.5":
                 llm = ChatOpenAI(temperature=0, model="gpt-3.5-turbo")
-                agent_type = AgentType.STRUCTURED_CHAT_ZERO_SHOT_REACT_DESCRIPTION
                 max_iterations = 15
             case "gpt4":
                 llm = ChatOpenAI(temperature=0, model="gpt-4")
-                agent_type = AgentType.STRUCTURED_CHAT_ZERO_SHOT_REACT_DESCRIPTION
                 max_iterations = 15
             case "claude":
                 llm = ChatAnthropic(temperature=0, model="claude-2")
-                agent_type = AgentType.CHAT_ZERO_SHOT_REACT_DESCRIPTION
                 max_iterations = 5
             case "local":
                 llm = TextGen(model_url=TEXTGEN_MODEL_URL)
-                agent_type = AgentType.STRUCTURED_CHAT_ZERO_SHOT_REACT_DESCRIPTION
                 max_iterations = 30
             case _:
                 raise gr.Error("Assistant not supported yet")
@@ -202,6 +207,27 @@ Question: {input}
             file_output: file_list_instance
         }
 
+    def download_file(file_name, token_instance):
+        file_response = requests.get(
+            f'{SUPERVISOR_API}/downloadfile?file_name={file_name}', headers={
+                'Authorization': f'Bearer {token_instance}'
+            }, timeout=600
+        )
+
+        if file_response.status_code != 200:
+            raise gr.Error("No container created yet")
+
+        file_content = file_response.content
+
+        os.makedirs(f"/tmp/{token_instance}", exist_ok=True)
+        temp_file_name = f"/tmp/{token_instance}/{file_name}"
+        with open(temp_file_name, 'wb+') as out_file:
+            out_file.write(file_content)
+
+        return {
+            manual_download_file: temp_file_name
+        }
+
     def chatbot_handle(chatbot_instance, msg_instance, file_list_instance, agent_executor_instance):
 
         # add files to the prompt
@@ -265,6 +291,9 @@ Question: {input}
         file_list, file_output])
     send.click(chatbot_handle, [chatbot, msg, file_list, agent_executor], [
                chatbot, msg, agent_executor])
+
+    manual_download_send.click(download_file, [
+                               manual_download_text, token], manual_download_file)
 
 
 if __name__ == "__main__":
