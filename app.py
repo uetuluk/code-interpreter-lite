@@ -24,8 +24,8 @@ load_dotenv()
 
 SUPERVISOR_API = os.environ.get("SUPERVISOR_API")
 TEXTGEN_MODEL_URL = os.environ.get("TEXTGEN_MODEL_URL")
+DEFAULT_ASSISTANT = os.environ.get("DEFAULT_ASSISTANT", "gpt3.5")
 
-DEFAULT_ASSISTANT = "gpt3.5"
 ASSISTANT_LIST = ["gpt3.5", "gpt4", "claude", "local"]
 
 with gr.Blocks() as demo:
@@ -111,12 +111,12 @@ with gr.Blocks() as demo:
                 max_iterations = 15
                 approach = 1
             case "claude":
-                raise gr.Error("This assistant is not working properly yet.")
+                # raise gr.Error("This assistant is not working properly yet.")
                 llm = ChatAnthropic(temperature=0, model="claude-2")
                 max_iterations = 5
                 approach = 1
             case "local":
-                raise gr.Error("This assistant is not working properly yet.")
+                # raise gr.Error("This assistant is not working properly yet.")
                 llm = TextGen(model_url=TEXTGEN_MODEL_URL)
                 max_iterations = 30
                 approach = 1
@@ -326,4 +326,4 @@ Question: {input}
 
 
 if __name__ == "__main__":
-    demo.launch()
+    demo.launch(server_name="0.0.0.0", server_port=7860)
