@@ -1,4 +1,4 @@
-![Banner Image](docs/banner-image.jpg)
+![Banner Image](docs/banner-image.png)
 
 # Code Interpreter Lite
 
