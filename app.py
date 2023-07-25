@@ -14,6 +14,8 @@ from langchain.callbacks.base import BaseCallbackHandler
 from langchain.schema import AgentAction, LLMResult, AgentFinish, OutputParserException
 from langchain.prompts import MessagesPlaceholder
 from langchain.memory import ConversationBufferMemory
+from langchain.experimental.plan_and_execute import PlanAndExecute, load_agent_executor, load_chat_planner
+
 
 from typing import Any, Dict, List
 
@@ -23,7 +25,7 @@ load_dotenv()
 SUPERVISOR_API = os.environ.get("SUPERVISOR_API")
 TEXTGEN_MODEL_URL = os.environ.get("TEXTGEN_MODEL_URL")
 
-DEFAULT_ASSISTANT = "local"
+DEFAULT_ASSISTANT = "gpt3.5"
 ASSISTANT_LIST = ["gpt3.5", "gpt4", "claude", "local"]
 
 with gr.Blocks() as demo:
@@ -103,15 +105,21 @@ with gr.Blocks() as demo:
             case "gpt3.5":
                 llm = ChatOpenAI(temperature=0, model="gpt-3.5-turbo")
                 max_iterations = 15
+                approach = 1
             case "gpt4":
                 llm = ChatOpenAI(temperature=0, model="gpt-4")
                 max_iterations = 15
+                approach = 1
             case "claude":
+                raise gr.Error("This assistant is not working properly yet.")
                 llm = ChatAnthropic(temperature=0, model="claude-2")
                 max_iterations = 5
+                approach = 1
             case "local":
+                raise gr.Error("This assistant is not working properly yet.")
                 llm = TextGen(model_url=TEXTGEN_MODEL_URL)
                 max_iterations = 30
+                approach = 1
             case _:
                 raise gr.Error("Assistant not supported yet")
                 # return {
@@ -157,28 +165,29 @@ with gr.Blocks() as demo:
         memory = ConversationBufferMemory(
             memory_key="chat_history")
 
-        prompt_prefix = 'You are an agent designed to write and execute python code to answer questions.\nYou have access to a Code Interpreter Lite tool, which you can use to execute python code.\nIf you get an error, debug your code and try again.\nOnly use the output of your code to answer the question. \nYou might know the answer without running any code, but you should still run the code to get the answer.\nIf there is a need to create or save a file, save it in the /mnt/data directory.\nYou cannot install new packages.\n'
-        prompt_suffix = """Begin!"
+        if approach == 1:
+            prompt_prefix = 'You are an agent designed to write and execute python code to answer questions.\nYou have access to a Code Interpreter Lite tool, which you can use to execute python code.\nIf you get an error, debug your code and try again.\nOnly use the output of your code to answer the question. \nYou might know the answer without running any code, but you should still run the code to get the answer.\nIf there is a need to create or save a file, save it in the /mnt/data directory.\nYou cannot install new packages.\n'
+            prompt_suffix = """Begin!"
 
 {chat_history}
 Question: {input}
 {agent_scratchpad}"""
 
-        prompt = ZeroShotAgent.create_prompt(
-            tools,
-            prefix=prompt_prefix,
-            suffix=prompt_suffix,
-            input_variables=["input", "chat_history", "agent_scratchpad"],
-        )
+            prompt = ZeroShotAgent.create_prompt(
+                tools,
+                prefix=prompt_prefix,
+                suffix=prompt_suffix,
+                input_variables=["input", "chat_history", "agent_scratchpad"],
+            )
 
-        llm_chain = LLMChain(llm=llm, prompt=prompt)
+            llm_chain = LLMChain(llm=llm, prompt=prompt)
 
-        agent = ZeroShotAgent(llm_chain=llm_chain, tools=tools,
-                              verbose=True, max_iterations=max_iterations)
+            agent = ZeroShotAgent(llm_chain=llm_chain, tools=tools,
+                                  verbose=True, max_iterations=max_iterations)
 
-        agent_executor_instance = AgentExecutor.from_agent_and_tools(
-            agent=agent, tools=tools, verbose=True, memory=memory
-        )
+            agent_executor_instance = AgentExecutor.from_agent_and_tools(
+                agent=agent, tools=tools, verbose=True, memory=memory
+            )
 
         return agent_executor_instance
 
