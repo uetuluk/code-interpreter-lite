@@ -7,6 +7,9 @@ An experimental client that uses LLMs with [docker-python-sandbox-supervisor](ht
 
 While the current version only works with GPT API, the goal is to make it work with any LLMs, especially local ones like LLaMA2. 
 
+## Showcase
+
+![Demo GIF](docs/Code%20Interpreter%20Lite%20Demo.gif)
 
 ## Project Structure
 
