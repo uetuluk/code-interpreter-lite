@@ -3,6 +3,7 @@ from dotenv import load_dotenv
 import os
 import requests
 import io
+import re
 from langchain import LLMChain
 from langchain.chat_models import ChatOpenAI
 from langchain.llms import TextGen
@@ -10,7 +11,7 @@ from langchain.chat_models import ChatAnthropic
 from langchain.agents import ZeroShotAgent, initialize_agent, AgentType, AgentExecutor
 from langchain.tools import StructuredTool
 from langchain.callbacks.base import BaseCallbackHandler
-from langchain.schema import AgentAction, LLMResult, AgentFinish
+from langchain.schema import AgentAction, LLMResult, AgentFinish, OutputParserException
 from langchain.prompts import MessagesPlaceholder
 from langchain.memory import ConversationBufferMemory
 
@@ -121,6 +122,18 @@ with gr.Blocks() as demo:
         # get tool
         def code_interpreter_lite(code: str) -> str:
             """Execute the python code and return the result."""
+            # handle markdown
+            def extract_code_from_markdown(md_text):
+                # Using regex to extract text between ```
+                pattern = r"```[\w]*\n(.*?)```"
+                match = re.search(pattern, md_text, re.DOTALL)
+                if match:
+                    return match.group(1).strip()
+                else:
+                    # might not be markdown
+                    return md_text
+            code = extract_code_from_markdown(code)
+
             code_response = requests.post(
                 f'{SUPERVISOR_API}/run', headers={
                     'Authorization': f'Bearer {token_instance}'
@@ -138,7 +151,7 @@ with gr.Blocks() as demo:
             return result
 
         tool = StructuredTool.from_function(
-            func=code_interpreter_lite, name="Code Interpreter Lite", description="useful for running python code")
+            func=code_interpreter_lite, name="Code Interpreter Lite", description="useful for running python code. The input should be a string of python code.")
         tools = [tool]
 
         memory = ConversationBufferMemory(
@@ -179,7 +192,9 @@ Question: {input}
             assistant: assistant_instance,
             assistant_selection: assistant_selection_instance,
             assistant_box: f"Current Assistant: {assistant_selection_instance}",
-            agent_executor: agent_executor_instance
+            agent_executor: agent_executor_instance,
+            chatbot: gr.update(value=[]),
+            msg: gr.update(value="")
         }
 
     def upload_file(file, token_instance, file_list_instance):
@@ -270,10 +285,15 @@ Question: {input}
             def get_chatbot_response(self):
                 return self.chatbot_response
 
-        chatbotHandler = ChatbotHandler()
-        agent_executor_instance(
-            chatbot_prompt, callbacks=[chatbotHandler])
-        chatbot_response = chatbotHandler.get_chatbot_response()
+        try:
+            chatbotHandler = ChatbotHandler()
+            agent_executor_instance(
+                chatbot_prompt, callbacks=[chatbotHandler])
+            chatbot_response = chatbotHandler.get_chatbot_response()
+
+        except OutputParserException as e:
+            raise gr.Error(
+                "Assistant could not handle the request. Error: " + str(e))
 
         chatbot_instance.append((msg_instance, chatbot_response))
 
@@ -286,7 +306,7 @@ Question: {input}
     button.click(create_container, [username, assistant], [
         token_box, token, container_row, chatbot_column, agent_executor])
     assistant_selection.input(
-        select_assistant, [assistant, assistant_selection, token], [assistant, assistant_selection, assistant_box, agent_executor])
+        select_assistant, [assistant, assistant_selection, token], [assistant, assistant_selection, assistant_box, agent_executor, chatbot, msg])
     file_upload.upload(upload_file, [file_upload, token, file_list], [
         file_list, file_output])
     send.click(chatbot_handle, [chatbot, msg, file_list, agent_executor], [
