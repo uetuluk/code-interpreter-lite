@@ -11,6 +11,13 @@ full-detached:
 	docker compose -f docker-compose.yml up -d
 	docker compose logs -f
 
+dev-stack:
+	docker compose -f docker-compose.dev.yml up
+
+dev-stack-detached:
+	docker compose -f docker-compose.dev.yml up -d
+	docker compose logs -f
+
 build-production-image:
 	docker build -t code-interpreter-lite:latest .
 
