@@ -300,7 +300,7 @@ def insert_newline_before_triple_backtick(text):
 
 def insert_summary_block(text):
     pattern = r"(Action: CIL)(.*?)(Observation:|$)"
-    replacement = r"<details><summary>CIL Code</summary>\n\1\n\2</details>\n"
+    replacement = r"<details><summary>CIL Code</summary>\n\1\2</details>\n\3"
 
     return re.sub(pattern, replacement, text, flags=re.DOTALL)
 
