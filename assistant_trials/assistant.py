@@ -223,23 +223,9 @@ def setup_assistant():
                 return False
 
         # handle base64 results - ie images
-        if len(result) > 256:
-            base64_string = result.split("\n")[1]
-            # check if it base64
-            if is_base64(base64_string):
-                decoded_data = base64.b64decode(base64_string)
-
-                # Generate the file name for the image
-                filename = "result.png"
-
-                # Save the image
-                with open(filename, "wb") as f:
-                    f.write(decoded_data)
-
-                result = filename
-
-            else:
-                result = "The result is too long to display."
+        print("Result from tool:", result)
+        if len(result) > 1024:
+            result = "The result is too long to display."
 
         return result
 
@@ -279,7 +265,7 @@ Thought: {agent_scratchpad}"""
     agent = ZeroShotAgent(llm_chain=llm_chain, allowed_tools=tool_names)
 
     agent_executor_instance = AgentExecutor.from_agent_and_tools(
-        agent=agent, tools=tools, verbose=True, return_intermediate_steps=True
+        agent=agent, tools=tools, verbose=True, return_intermediate_steps=True, max_iterations=2
     )
 
     return agent_executor_instance
@@ -300,7 +286,7 @@ def insert_newline_before_triple_backtick(text):
 
 def insert_summary_block(text):
     pattern = r"(Action: CIL)(.*?)(Observation:|$)"
-    replacement = r"<details><summary>CIL Code</summary>\n\1\2</details>\n\3"
+    replacement = r"<details><summary>CIL Code</summary>\n\1\2\n</details>\n\3"
 
     return re.sub(pattern, replacement, text, flags=re.DOTALL)
 
@@ -348,13 +334,26 @@ with gr.Blocks() as demo:
     with gr.Column() as chatbot_column:
         chatbot = gr.Chatbot()
         with gr.Row() as chatbot_input:
-            msg = gr.Textbox(placeholder="Type your message here", lines=8)
-            send = gr.Button(value="Send", variant="primary")
+            with gr.Column():
+                msg = gr.Textbox(placeholder="Type your message here")
+            with gr.Column():
+                send = gr.Button(value="Send", variant="primary")
+                regenerate = gr.Button(
+                    value="Regenerate", variant="secondary", interactive=False)
 
     def message_handle(chatbot_instance, msg_instance):
         return {
             chatbot: chatbot_instance + [[msg_instance, None]],
             msg: "",
+            regenerate: gr.update(interactive=True),
+        }
+
+    def regenerate_message_handle(chatbot_instance):
+        previous_message = chatbot_instance[-1][0]
+        chatbot_instance[-1] = [previous_message, None]
+
+        return {
+            chatbot: chatbot_instance,
         }
 
     def chatbot_handle(chatbot_instance):
@@ -431,7 +430,11 @@ with gr.Blocks() as demo:
                 continue
 
     send.click(message_handle, [chatbot, msg], [
-        chatbot, msg], queue=False).then(
+        chatbot, msg, regenerate]).then(
+        chatbot_handle, [chatbot], [chatbot]
+    )
+    regenerate.click(regenerate_message_handle, [chatbot], [
+        chatbot]).then(
         chatbot_handle, [chatbot], [chatbot]
     )
 

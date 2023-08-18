@@ -10,7 +10,7 @@ import base64
 import langchain
 from langchain import PromptTemplate, LLMChain
 from langchain.llms import TextGen
-from typing import Any, Dict, List, Optional, Iterator, Tuple
+from typing import Any, Dict, List, Optional, Iterator, Tuple, Union
 import json
 from langchain.schema.output import GenerationChunk
 from langchain.callbacks.manager import CallbackManagerForLLMRun
@@ -102,6 +102,7 @@ with gr.Blocks() as demo:
     # interface
     token = gr.State(value="")
     file_list = gr.State(value={})
+    stop_threads = gr.State(value=False)
     assistant = gr.State(
         value={"selected": DEFAULT_ASSISTANT, "options": ASSISTANT_LIST})
     agent_executor = gr.State()
@@ -126,8 +127,13 @@ with gr.Blocks() as demo:
             with gr.Column():
                 file_output = gr.JSON(label="File List")
                 file_upload = gr.UploadButton(label="Upload File")
-            msg = gr.Textbox(placeholder="Type your message here", lines=8)
-            send = gr.Button(value="Send", variant="primary")
+            with gr.Column():
+                msg = gr.Textbox(placeholder="Type your message here")
+            with gr.Column():
+                send = gr.Button(value="Send", variant="primary")
+                regenerate = gr.Button(
+                    value="Regenerate", variant="secondary", interactive=False)
+                stop = gr.Button(value="Stop", variant="stop")
 
         with gr.Column():
             gr.Markdown("Manual Download from Container")
@@ -373,32 +379,10 @@ with gr.Blocks() as demo:
                 # }
             result = code_response.json()
 
-            def is_base64(string):
-                try:
-                    # Try to decode the string as base64
-                    base64.b64decode(string, validate=True)
-                    return True
-                except:
-                    return False
-
             # handle base64 results - ie images
-            if len(result) > 256:
-                base64_string = result.split("\n")[1]
-                # check if it base64
-                if is_base64(base64_string):
-                    decoded_data = base64.b64decode(base64_string)
-
-                    # Generate the file name for the image
-                    filename = "result.png"
-
-                    # Save the image
-                    with open(filename, "wb") as f:
-                        f.write(decoded_data)
-
-                    result = filename
-
-                else:
-                    result = "The result is too long to display."
+            print("Result from tool:", result)
+            if len(result) > 1024:
+                result = "The result is too long to display."
 
             return result
 
@@ -427,10 +411,10 @@ Question: {input}
             llm_chain = LLMChain(llm=llm, prompt=prompt)
 
             agent = ZeroShotAgent(llm_chain=llm_chain, tools=tools,
-                                  verbose=True, max_iterations=max_iterations)
+                                  verbose=True)
 
             agent_executor_instance = AgentExecutor.from_agent_and_tools(
-                agent=agent, tools=tools, verbose=True, memory=memory
+                agent=agent, tools=tools, verbose=True, memory=memory, max_iterations=max_iterations
             )
 
         elif approach == 2:
@@ -463,10 +447,10 @@ Thought: {agent_scratchpad}"""
 
             tool_names = [tool.name for tool in tools]
             agent = ZeroShotAgent(llm_chain=llm_chain, allowed_tools=tool_names,
-                                  verbose=True, max_iterations=max_iterations)
+                                  verbose=True)
 
             agent_executor_instance = AgentExecutor.from_agent_and_tools(
-                agent=agent, tools=tools, memory=memory
+                agent=agent, tools=tools, memory=memory, max_iterations=max_iterations
             )
 
         return agent_executor_instance
@@ -532,6 +516,21 @@ Thought: {agent_scratchpad}"""
             manual_download_file: temp_file_name
         }
 
+    def regenerate_message_handle(chatbot_instance):
+        previous_message = chatbot_instance[-1][0]
+        chatbot_instance[-1] = [previous_message, None]
+
+        return {
+            chatbot: chatbot_instance,
+        }
+
+    def stop_chatbot_handle(stop_threads_instance):
+        stop_threads_instance = True
+
+        return {
+            stop_threads: stop_threads_instance
+        }
+
     def message_handle(chatbot_instance, msg_instance, file_list_instance):
 
         # add files to the prompt
@@ -552,9 +551,10 @@ Thought: {agent_scratchpad}"""
             chatbot: chatbot_instance + [[chatbot_prompt, None]],
             msg: "",
             file_list: {},
+            regenerate: gr.update(interactive=True),
         }
 
-    def chatbot_handle(chatbot_instance, agent_executor_instance):
+    def chatbot_handle(chatbot_instance, agent_executor_instance, stop_threads_instance):
 
         # class ChatbotHandler(BaseCallbackHandler):
         #     def __init__(self):
@@ -622,6 +622,9 @@ Thought: {agent_scratchpad}"""
         chatbot_instance[-1][1] = ""
 
         while True:
+            if stop_threads_instance is True:
+                streaming_queue.put(job_done)
+                break
             try:
                 next_token = streaming_queue.get(True, timeout=1)
                 if next_token is job_done:
@@ -630,6 +633,10 @@ Thought: {agent_scratchpad}"""
                 yield chatbot_instance
             except Empty:
                 continue
+            except Exception as error:
+                streaming_queue.put(job_done)
+                raise gr.Error(
+                    "Server could not handle the request. Error: " + str(error))
 
         # try:
         #     chatbotHandler = ChatbotHandler()
@@ -656,9 +663,15 @@ Thought: {agent_scratchpad}"""
     file_upload.upload(upload_file, [file_upload, token, file_list], [
         file_list, file_output])
     send.click(message_handle, [chatbot, msg, file_list], [
-               chatbot, msg, file_list], queue=False).then(
-        chatbot_handle, [chatbot, agent_executor], [chatbot]
+               chatbot, msg, file_list, regenerate]).then(
+        chatbot_handle, [chatbot, agent_executor, stop_threads], [chatbot]
     )
+    regenerate.click(regenerate_message_handle, [chatbot], [
+        chatbot]).then(
+        chatbot_handle, [chatbot, agent_executor, stop_threads], [chatbot]
+    )
+    stop.click(stop_chatbot_handle, [stop_threads], [
+               stop_threads], queue=False)
 
     manual_download_send.click(download_file, [
                                manual_download_text, token], manual_download_file)
